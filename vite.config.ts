@@ -12,4 +12,12 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      watch: {
+        // Playwright MCP 写快照到此目录，不排除会触发整页 full-reload（丢失页面状态）
+        ignored: ["**/.playwright-mcp/**"],
+      },
+    },
+  },
 });

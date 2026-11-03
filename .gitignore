@@ -30,3 +30,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 本地大体积资源：参考实验库（scripts/scan-legacy.ts.py 重建）与原始参考目录
+/legacy/
+参考/
+
+# 独立仓库（另有 GitHub 远端 biolab_tags_tools.git），不纳入本项目
+/biolab_tags_tools/
+
+# Playwright MCP 调试缓存
+.playwright-mcp/

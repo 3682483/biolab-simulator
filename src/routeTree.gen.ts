@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MapRouteImport } from './routes/map'
+import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as LabsIndexRouteImport } from './routes/labs.index'
 import { Route as LabsIdRouteImport } from './routes/labs.$id'
 
@@ -22,6 +23,11 @@ const IndexRoute = IndexRouteImport.update({
 const MapRoute = MapRouteImport.update({
   id: '/map',
   path: '/map',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ToolsRoute = ToolsRouteImport.update({
+  id: '/tools',
+  path: '/tools',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LabsIndexRoute = LabsIndexRouteImport.update({
@@ -38,12 +44,14 @@ const LabsIdRoute = LabsIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/map': typeof MapRoute
+  '/tools': typeof ToolsRoute
   '/labs/$id': typeof LabsIdRoute
   '/labs/': typeof LabsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/map': typeof MapRoute
+  '/tools': typeof ToolsRoute
   '/labs/$id': typeof LabsIdRoute
   '/labs': typeof LabsIndexRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/map': typeof MapRoute
+  '/tools': typeof ToolsRoute
   '/labs/$id': typeof LabsIdRoute
   '/labs/': typeof LabsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/map' | '/labs/$id' | '/labs/'
+  fullPaths: '/' | '/map' | '/tools' | '/labs/$id' | '/labs/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/map' | '/labs/$id' | '/labs'
-  id: '__root__' | '/' | '/map' | '/labs/$id' | '/labs/'
+  to: '/' | '/map' | '/tools' | '/labs/$id' | '/labs'
+  id: '__root__' | '/' | '/map' | '/tools' | '/labs/$id' | '/labs/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   MapRoute: typeof MapRoute
+  ToolsRoute: typeof ToolsRoute
   LabsIdRoute: typeof LabsIdRoute
   LabsIndexRoute: typeof LabsIndexRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/map'
       fullPath: '/map'
       preLoaderRoute: typeof MapRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tools': {
+      id: '/tools'
+      path: '/tools'
+      fullPath: '/tools'
+      preLoaderRoute: typeof ToolsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/labs/': {
@@ -105,6 +122,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   MapRoute: MapRoute,
+  ToolsRoute: ToolsRoute,
   LabsIdRoute: LabsIdRoute,
   LabsIndexRoute: LabsIndexRoute,
 }
