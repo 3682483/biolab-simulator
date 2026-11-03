@@ -38,7 +38,7 @@ export const Route = createFileRoute("/labs/$id")({
 
 function LabPage() {
   const { lab } = Route.useLoaderData();
-  const Sim = sims[lab.id];
+  const Sim = sims[lab.id] ?? Microscope;
   const [done, setDone] = useState<number[]>([]);
   const toggle = (i: number) => setDone((d) => (d.includes(i) ? d.filter((x) => x !== i) : [...d, i]));
 

@@ -27,7 +27,8 @@ export function PCR() {
   const f = p - cycle;
   const si = f < 0.33 ? 0 : f < 0.6 ? 1 : 2;
   const local = si === 0 ? f / 0.33 : si === 1 ? (f - 0.33) / 0.27 : (f - 0.6) / 0.4;
-  const temp = steps[si].temp;
+  const st = steps[si]!;
+  const temp = st.temp;
 
   const open = si === 0 ? Math.min(1, local * 1.5) : 1;
   const primer = si === 1 ? Math.min(1, local * 1.4) : si === 2 ? 1 : 0;
@@ -39,7 +40,7 @@ export function PCR() {
 
   return (
     <>
-      <Stage caption={`第 ${Math.min(cycle + 1, maxCycles)} 轮 · ${steps[si].name} · ${temp}°C`}>
+      <Stage caption={`第 ${Math.min(cycle + 1, maxCycles)} 轮 · ${st.name} · ${temp}°C`}>
         <svg viewBox="0 0 400 300" className="aspect-[4/3] w-full">
           <g transform="translate(60 110)">
             <line x1="0" x2="280" y1={-gap / 2} y2={-gap / 2} stroke="var(--specimen)" strokeWidth="4" strokeLinecap="round" />
@@ -58,12 +59,12 @@ export function PCR() {
           {/* temp profile */}
           <g transform="translate(30 200)">
             {[0, 1, 2].map((i) => {
-              const y = 70 - ((steps[i].temp - 40) / 60) * 70;
+              const y = 70 - ((steps[i]!.temp - 40) / 60) * 70;
               return (
                 <g key={i}>
                   <rect x={i * 115} y={y} width="110" height="2" fill={i === si ? "var(--signal)" : "var(--stage-line)"} />
                   <text x={i * 115} y={y - 6} fontSize="10" fontFamily="var(--font-mono)" fill="var(--stage-foreground)" opacity={i === si ? 1 : 0.5}>
-                    {steps[i].name} {steps[i].temp}°C
+                    {steps[i]!.name} {steps[i]!.temp}°C
                   </text>
                 </g>
               );

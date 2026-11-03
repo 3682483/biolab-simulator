@@ -28,12 +28,12 @@ export function Control({
           {unit && <span className="ml-0.5 text-muted-foreground">{unit}</span>}
         </span>
       </div>
-      <Slider value={[value]} min={min} max={max} step={step} onValueChange={(v) => onChange(v[0])} />
+      <Slider value={[value]} min={min} max={max} step={step} onValueChange={(v) => onChange(v[0] ?? value)} />
     </div>
   );
 }
 
-export function Readout({ label, value, tone }: { label: string; value: ReactNode; tone?: "good" | "warn" }) {
+export function Readout({ label, value, tone }: { label: string; value: ReactNode; tone?: "good" | "warn" | undefined }) {
   return (
     <div className="rounded-md border bg-card px-3 py-2.5">
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</div>
