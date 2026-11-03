@@ -13,6 +13,16 @@ const _vec3 = new THREE.Vector3();
 const _screenVec = new THREE.Vector3();
 const _anchorVec = new THREE.Vector3();
 const _screenAnchorVec = new THREE.Vector3();
+const _labelDir = new THREE.Vector3();
+const _pAnchorVec = new THREE.Vector3();
+
+// 模型导入进度：reading = 读文件（有真实百分比），parsing = 本地解析（不定进度）
+export interface ModelLoadProgress {
+  phase: 'reading' | 'parsing';
+  percent: number;
+  fileName: string;
+  fileSizeMB: string;
+}
 
 interface CellViewerProps {
   modelSource: 'none' | 'custom' | 'demo-mech';
@@ -26,6 +36,7 @@ interface CellViewerProps {
   customFile: File | null;
   demoTrigger: number;
   onModelLoaded: (stats: ModelStats) => void;
+  onLoadProgress?: (progress: ModelLoadProgress | null) => void;
   cameraPresetCommand: string | null;
   onPreviousViewChange?: (hasPrev: boolean) => void;
   onManualOrbit?: () => void;
@@ -45,6 +56,7 @@ export const CellViewer: React.FC<CellViewerProps> = ({
   customFile,
   demoTrigger,
   onModelLoaded,
+  onLoadProgress,
   cameraPresetCommand,
   onPreviousViewChange,
   onManualOrbit,
@@ -82,6 +94,13 @@ export const CellViewer: React.FC<CellViewerProps> = ({
   const onModelLoadedRef = useRef(onModelLoaded);
   onModelLoadedRef.current = onModelLoaded;
 
+  const onLoadProgressRef = useRef(onLoadProgress);
+  onLoadProgressRef.current = onLoadProgress;
+
+  // 标签引线外推基准：模型中心 + 最小引线长度（随模型尺寸自适应，加载时更新）
+  const modelCenterRef = useRef<THREE.Vector3>(new THREE.Vector3());
+  const minLabelDistRef = useRef(0.3);
+
   const onSurfaceClickRef = useRef(onSurfaceClick);
   onSurfaceClickRef.current = onSurfaceClick;
 
@@ -101,6 +120,30 @@ export const CellViewer: React.FC<CellViewerProps> = ({
 
   const onManualOrbitRef = useRef(onManualOrbit);
   onManualOrbitRef.current = onManualOrbit;
+
+  // 标签引线外推：labelPoint 离锚点太近时沿原方向推出最小距离，避免标签全挤在模型中间
+  const computeEffectiveLabelPoint = useCallback(
+    (anno: ModelAnnotation, scale: number, out: THREE.Vector3): THREE.Vector3 => {
+      out.set(anno.labelPoint[0] * scale, anno.labelPoint[1] * scale, anno.labelPoint[2] * scale);
+      _pAnchorVec.set(anno.anchorPoint[0] * scale, anno.anchorPoint[1] * scale, anno.anchorPoint[2] * scale);
+      _labelDir.subVectors(out, _pAnchorVec);
+      if (_labelDir.lengthSq() < 1e-9) {
+        // 退化：labelPoint 与锚点重合，改用“模型中心 → 锚点”的向外方向
+        _labelDir.subVectors(_pAnchorVec, modelCenterRef.current);
+      }
+      if (_labelDir.lengthSq() < 1e-9) {
+        _labelDir.set(0, 1, 0);
+      }
+      _labelDir.normalize();
+
+      const minDist = minLabelDistRef.current;
+      if (out.distanceTo(_pAnchorVec) < minDist) {
+        out.copy(_pAnchorVec).addScaledVector(_labelDir, minDist);
+      }
+      return out;
+    },
+    []
+  );
 
   // Update label DOM positions
   const updateLabelsDOM = useCallback(() => {
@@ -124,11 +167,7 @@ export const CellViewer: React.FC<CellViewerProps> = ({
         return;
       }
 
-      _vec3.set(
-        anno.labelPoint[0] * scale,
-        anno.labelPoint[1] * scale,
-        anno.labelPoint[2] * scale
-      );
+      computeEffectiveLabelPoint(anno, scale, _vec3);
 
       _screenVec.copy(_vec3).project(cam);
 
@@ -174,7 +213,7 @@ export const CellViewer: React.FC<CellViewerProps> = ({
         el.style.opacity = String(Math.min(1, Math.max(0.4, 1 - dist / 12)));
       }
     });
-  }, []);
+  }, [computeEffectiveLabelPoint]);
 
   // On-demand render request
   const requestRender = useCallback(() => {
@@ -283,6 +322,10 @@ export const CellViewer: React.FC<CellViewerProps> = ({
   useEffect(() => {
     if (!mountRef.current) return;
 
+    // SPA 导航 / StrictMode 双挂载时 cleanup 可能删不净旧画布（卸载瞬间 ref 已置 null）——
+    // 残留画布会把新画布顶出视口，出现"首次进入黑屏、刷新才正常"。先清场再挂。
+    mountRef.current.querySelectorAll('canvas').forEach((c) => c.remove());
+
     const width = mountRef.current.clientWidth;
     const height = mountRef.current.clientHeight;
 
@@ -313,6 +356,10 @@ export const CellViewer: React.FC<CellViewerProps> = ({
     // Clean 2-point studio lighting (Fast, no shadow depth maps)
     const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x1e1b4b, 0.9);
     scene.add(hemiLight);
+
+    // 环境光补底：消除背光面死黑，让暗部细节可见
+    const ambientLight = new THREE.AmbientLight(0xbfd4ff, 0.55);
+    scene.add(ambientLight);
 
     const dirLight = new THREE.DirectionalLight(0xfff7ed, 2.2);
     dirLight.position.set(4, 6, 5);
@@ -398,18 +445,45 @@ export const CellViewer: React.FC<CellViewerProps> = ({
 
     window.addEventListener('resize', handleResize);
 
+    // 页面闲置久/休眠恢复/系统内存压力时浏览器可能回收 WebGL 上下文——
+    // 不 preventDefault 的话 canvas 永久死掉，点载入模型也画不出来，只能刷新页面
+    const handleContextLost = (e: Event) => {
+      e.preventDefault(); // 允许浏览器自动 restore
+      console.warn('[CellViewer] WebGL 上下文丢失，等待恢复…');
+    };
+    const handleContextRestored = () => {
+      // restore 后 GL 资源（几何/纹理/着色器）是懒重建的，首帧可能输出空画面——隔帧再补一帧
+      rendererRef.current?.resetState?.();
+      requestRender();
+      requestAnimationFrame(() => requestRender());
+    };
+    renderer.domElement.addEventListener('webglcontextlost', handleContextLost, false);
+    renderer.domElement.addEventListener('webglcontextrestored', handleContextRestored, false);
+
+    // 从后台标签页/休眠切回时 canvas 合成层内容可能被丢弃，兜底重画一帧；
+    // 同时复位挂起标志——页面隐藏期间 rAF 停摆可能让防重入标志卡在 true，不复位的话这次重画也会被吞
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        renderRequestedRef.current = false;
+        requestRender();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       window.removeEventListener('resize', handleResize);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
+      renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored);
       controls.dispose();
       renderer.dispose();
-      if (mountRef.current && renderer.domElement) {
-        mountRef.current.removeChild(renderer.domElement);
-      }
+      // 自移除：不依赖 mountRef（卸载瞬间 ref 可能已被 React 置 null，removeChild 会静默跳过导致画布残留）
+      renderer.domElement.remove();
     };
   }, [requestRender]);
 
-  // Helper to scale model to approx 40% of viewport width and height
-  const fitModelTo40Percent = (model: THREE.Group | THREE.Object3D) => {
+  // Helper to scale model to a comfortable fraction (~52%) of the smaller viewport dimension
+  const fitModelToViewport = (model: THREE.Group | THREE.Object3D) => {
     if (!cameraRef.current || !controlsRef.current) return;
 
     const camera = cameraRef.current;
@@ -431,7 +505,7 @@ export const CellViewer: React.FC<CellViewerProps> = ({
     const visibleWidth = visibleHeight * camera.aspect;
     const minViewportDim = Math.min(visibleHeight, visibleWidth);
 
-    const targetModelDim = minViewportDim * 0.40;
+    const targetModelDim = minViewportDim * 0.52;
     const finalScale = targetModelDim / maxDim;
 
     model.scale.setScalar(finalScale);
@@ -439,6 +513,12 @@ export const CellViewer: React.FC<CellViewerProps> = ({
     // Compute bounding box after scaling
     model.updateMatrixWorld(true);
     const scaledBox = new THREE.Box3().setFromObject(model);
+
+    // 更新标签外推基准：模型中心 + 最小引线长度（约模型对角线 1/3，保证标签散在模型外围而非挤在中间）
+    scaledBox.getCenter(modelCenterRef.current);
+    const scaledSize = new THREE.Vector3();
+    scaledBox.getSize(scaledSize);
+    minLabelDistRef.current = scaledSize.length() * 0.32;
 
     // Reduce height off the grid to ~1/4 of previous gap:
     // Previously the grid was at -1.2 while model bottom was at ~ -0.6 (gap was ~ 0.55m - 0.6m).
@@ -456,88 +536,117 @@ export const CellViewer: React.FC<CellViewerProps> = ({
     }
   }, [showGrid, requestRender]);
 
-  // 2. Custom GLB File Upload & Parsing
+  // 2. Custom GLB File Upload & Parsing（全程本地：FileReader 读内存 + GLTFLoader.parse，零网络请求）
   useEffect(() => {
     if (!customFile || !sceneRef.current) return;
 
     const loader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    // Draco 解码器走本地 public/draco，确保 Draco 压缩模型也不产生任何外部网络请求
+    dracoLoader.setDecoderPath('/draco/');
     loader.setDRACOLoader(dracoLoader);
 
+    const fileSizeMB = (customFile.size / (1024 * 1024)).toFixed(2);
+    const reportProgress = onLoadProgressRef.current;
+
     const reader = new FileReader();
+    reader.onprogress = (e) => {
+      if (reportProgress && e.total > 0) {
+        reportProgress({
+          phase: 'reading',
+          percent: Math.round((e.loaded / e.total) * 100),
+          fileName: customFile.name,
+          fileSizeMB,
+        });
+      }
+    };
     reader.onload = (e) => {
       const buffer = e.target?.result as ArrayBuffer;
-      if (!buffer) return;
+      if (!buffer) {
+        reportProgress?.(null);
+        return;
+      }
 
-      loader.parse(
-        buffer,
-        '',
-        (gltf) => {
-          if (!sceneRef.current) return;
+      // 解析是同步阻塞主线程的，先让进度条渲染出来再动手
+      reportProgress?.({
+        phase: 'parsing',
+        percent: 100,
+        fileName: customFile.name,
+        fileSizeMB,
+      });
+      setTimeout(() => {
+        loader.parse(
+          buffer,
+          '',
+          (gltf) => {
+            if (!sceneRef.current) return;
 
-          if (currentModelGroupRef.current) {
-            sceneRef.current.remove(currentModelGroupRef.current);
-          }
+            if (currentModelGroupRef.current) {
+              sceneRef.current.remove(currentModelGroupRef.current);
+            }
 
-          const model = gltf.scene;
-          model.name = 'Custom_3D_Model';
+            const model = gltf.scene;
+            model.name = 'Custom_3D_Model';
 
-          let meshCount = 0;
-          let vertexCount = 0;
-          let triangleCount = 0;
-          const materials = new Set<string>();
+            let meshCount = 0;
+            let vertexCount = 0;
+            let triangleCount = 0;
+            const materials = new Set<string>();
 
-          model.traverse((child) => {
-            if ((child as THREE.Mesh).isMesh) {
-              const mesh = child as THREE.Mesh;
-              meshCount++;
-              if (mesh.geometry) {
-                const posAttr = mesh.geometry.attributes['position'];
-                vertexCount += posAttr ? posAttr.count : 0;
-                if (mesh.geometry.index) {
-                  triangleCount += mesh.geometry.index.count / 3;
+            model.traverse((child) => {
+              if ((child as THREE.Mesh).isMesh) {
+                const mesh = child as THREE.Mesh;
+                meshCount++;
+                if (mesh.geometry) {
+                  const posAttr = mesh.geometry.attributes['position'];
+                  vertexCount += posAttr ? posAttr.count : 0;
+                  if (mesh.geometry.index) {
+                    triangleCount += mesh.geometry.index.count / 3;
+                  }
+                }
+                if (mesh.material) {
+                  materials.add(Array.isArray(mesh.material) ? 'multi' : mesh.material.name || 'mat');
                 }
               }
-              if (mesh.material) {
-                materials.add(Array.isArray(mesh.material) ? 'multi' : mesh.material.name || 'mat');
-              }
-            }
-          });
-
-          // Scale model to ~40% of viewport
-          fitModelTo40Percent(model);
-
-          sceneRef.current.add(model);
-          currentModelGroupRef.current = model;
-
-          // Reset camera & render
-          targetCamPos.current.set(3.2, 2.4, 4.2);
-          targetLookAt.current.set(0, 0, 0);
-          if (cameraRef.current && controlsRef.current) {
-            cameraRef.current.position.copy(targetCamPos.current);
-            controlsRef.current.target.copy(targetLookAt.current);
-            controlsRef.current.update();
-          }
-
-          requestRender();
-
-          if (onModelLoadedRef.current) {
-            onModelLoadedRef.current({
-              meshCount,
-              vertexCount,
-              triangleCount,
-              materialCount: materials.size,
-              fileName: customFile.name,
-              fileSize: (customFile.size / (1024 * 1024)).toFixed(2) + ' MB',
             });
+
+            // Scale model to a comfortable fraction of viewport
+            fitModelToViewport(model);
+
+            sceneRef.current.add(model);
+            currentModelGroupRef.current = model;
+
+            // Reset camera & render
+            targetCamPos.current.set(3.2, 2.4, 4.2);
+            targetLookAt.current.set(0, 0, 0);
+            if (cameraRef.current && controlsRef.current) {
+              cameraRef.current.position.copy(targetCamPos.current);
+              controlsRef.current.target.copy(targetLookAt.current);
+              controlsRef.current.update();
+            }
+
+            requestRender();
+
+            if (onModelLoadedRef.current) {
+              onModelLoadedRef.current({
+                meshCount,
+                vertexCount,
+                triangleCount,
+                materialCount: materials.size,
+                fileName: customFile.name,
+                fileSize: fileSizeMB + ' MB',
+              });
+            }
+            reportProgress?.(null);
+          },
+          (err) => {
+            console.error('Failed to parse GLB:', err);
+            reportProgress?.(null);
           }
-        },
-        (err) => {
-          console.error('Failed to parse GLB:', err);
-        }
-      );
+        );
+      }, 0);
     };
+    reader.onerror = () => reportProgress?.(null);
 
     reader.readAsArrayBuffer(customFile);
   }, [customFile, requestRender]);
@@ -551,7 +660,7 @@ export const CellViewer: React.FC<CellViewerProps> = ({
     }
 
     const demoModel = createProceduralMechanical();
-    fitModelTo40Percent(demoModel);
+    fitModelToViewport(demoModel);
 
     sceneRef.current.add(demoModel);
     currentModelGroupRef.current = demoModel;
@@ -650,21 +759,33 @@ export const CellViewer: React.FC<CellViewerProps> = ({
   }, [cameraPresetCommand, animateCameraToTarget]);
 
   // 6. Camera Focus on Selected Annotation
+  // 只换角度不放大：保持用户当前观察距离，把相机绕到锚点所在方位（模型中心 → 锚点延长线）
   useEffect(() => {
     if (!selectedAnnotationId || modelSource === 'none') return;
     const anno = annotations.find((a) => a.id === selectedAnnotationId);
-    if (anno && currentModelGroupRef.current) {
+    if (anno && currentModelGroupRef.current && cameraRef.current && controlsRef.current) {
       const scale = currentModelGroupRef.current.scale.x;
-      const focusLookAt = new THREE.Vector3(
+      const cam = cameraRef.current;
+      const ctrl = controlsRef.current;
+
+      const anchor = new THREE.Vector3(
         anno.anchorPoint[0] * scale,
         anno.anchorPoint[1] * scale,
         anno.anchorPoint[2] * scale
       );
-      const focusPos = new THREE.Vector3(
-        anno.labelPoint[0] * scale * 1.5 + 0.5,
-        anno.labelPoint[1] * scale * 1.5 + 0.5,
-        anno.labelPoint[2] * scale * 1.5 + 0.8
-      );
+
+      // 观察方向：从模型中心穿过锚点向外，相机落在锚点方位同距离处
+      const viewDir = new THREE.Vector3().subVectors(anchor, modelCenterRef.current);
+      if (viewDir.lengthSq() < 1e-9) viewDir.set(0, 0.4, 1);
+      viewDir.normalize();
+
+      // 距离保持用户当前值（滚轮缩放不受干扰），绝不放大
+      const dist = cam.position.distanceTo(ctrl.target);
+      const focusPos = anchor.clone().addScaledVector(viewDir, dist);
+
+      // 注视点在模型中心与锚点之间偏中心，既对准标注又保留模型整体轮廓
+      const focusLookAt = modelCenterRef.current.clone().lerp(anchor, 0.35);
+
       animateCameraToTarget(focusPos, focusLookAt);
     }
   }, [selectedAnnotationId, annotations, modelSource, animateCameraToTarget]);
@@ -699,11 +820,7 @@ export const CellViewer: React.FC<CellViewerProps> = ({
         anno.anchorPoint[2] * scale
       );
 
-      const pLabel = new THREE.Vector3(
-        anno.labelPoint[0] * scale,
-        anno.labelPoint[1] * scale,
-        anno.labelPoint[2] * scale
-      );
+      const pLabel = computeEffectiveLabelPoint(anno, scale, new THREE.Vector3());
 
       // Direction from anchor to label
       const lineDir = new THREE.Vector3().subVectors(pLabel, pAnchor);
@@ -778,7 +895,7 @@ export const CellViewer: React.FC<CellViewerProps> = ({
     });
 
     requestRender();
-  }, [annotations, showAnnotations, selectedAnnotationId, modelSource, requestRender]);
+  }, [annotations, showAnnotations, selectedAnnotationId, modelSource, requestRender, computeEffectiveLabelPoint]);
 
   // 8. Raycasting Click Handler
   const handleCanvasClick = useCallback(

@@ -1,7 +1,7 @@
 // OmniModel3D：仿真模型库 3D 查看器（融合自 biolab_tags_tools 的 App.tsx）
 // 页面内嵌版：容器高度自适应路由布局；内置航发透平机械演示模型一个案例。
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { CellViewer } from './CellViewer';
+import { CellViewer, ModelLoadProgress } from './CellViewer';
 import { UniversalControlDock } from './UniversalControlDock';
 import { AnnotationDetailModal } from './AnnotationDetailModal';
 import { AddAnnotationModal } from './AddAnnotationModal';
@@ -12,7 +12,8 @@ import { ModelAnnotation, ModelStats } from '../types/annotation';
 import { soundFX } from '../utils/audio';
 import { exportModelWithAnnotationsToGLB } from '../utils/glbExporter';
 import { exportStandaloneHTMLPage } from '../utils/htmlExporter';
-import { Box, Upload, Download, Tag, RotateCcw, Globe, ListFilter } from 'lucide-react';
+import { Box, Upload, Download, Tag, RotateCcw, Globe, ListFilter, Maximize, Minimize, ArrowLeft, Loader2, ShieldCheck } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
 
 type ModelSource = 'none' | 'custom' | 'demo-mech';
 
@@ -21,6 +22,7 @@ export default function OmniModel3D() {
   const [modelSource, setModelSource] = useState<ModelSource>('none');
   const [customFile, setCustomFile] = useState<File | null>(null);
   const [modelStats, setModelStats] = useState<ModelStats | null>(null);
+  const [loadProgress, setLoadProgress] = useState<ModelLoadProgress | null>(null);
   const [demoTrigger, setDemoTrigger] = useState<number>(0);
 
   // Global Drag and Drop over window
@@ -265,8 +267,68 @@ export default function OmniModel3D() {
 
   const selectedAnnotation = annotations.find((a) => a.id === selectedAnnotationId) || null;
 
+  // 全屏浏览：Fullscreen API + fullscreenchange 双向同步
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  // 浏览器弹出原生文件选择器时会强制退出全屏——记住意图，选完/取消后自动回全屏
+  const pendingFsRestoreRef = useRef(false);
+
+  const restoreFullscreenAfterPicker = useCallback(() => {
+    if (!pendingFsRestoreRef.current) return;
+    pendingFsRestoreRef.current = false;
+    requestAnimationFrame(() => {
+      if (!document.fullscreenElement && containerRef.current) {
+        containerRef.current.requestFullscreen().catch(() => {});
+      }
+    });
+  }, []);
+
+  const openFilePicker = useCallback(() => {
+    if (document.fullscreenElement) pendingFsRestoreRef.current = true;
+    fileInputRef.current?.click();
+  }, []);
+
+  const openJsonPicker = useCallback(() => {
+    if (document.fullscreenElement) pendingFsRestoreRef.current = true;
+    jsonInputRef.current?.click();
+  }, []);
+
+  const handleToggleFullscreen = useCallback(() => {
+    soundFX.playClick();
+    if (document.fullscreenElement) {
+      pendingFsRestoreRef.current = false;
+      void document.exitFullscreen();
+    } else if (containerRef.current) {
+      void containerRef.current.requestFullscreen().catch(() => {
+        // 浏览器策略拒绝时静默（如 iframe 无 allowfullscreen）
+      });
+    }
+  }, []);
+
+  // file input 的 cancel 事件（用户取消文件选择）React 类型尚未收录，原生挂载
+  useEffect(() => {
+    const fileInput = fileInputRef.current;
+    const jsonInput = jsonInputRef.current;
+    fileInput?.addEventListener('cancel', restoreFullscreenAfterPicker);
+    jsonInput?.addEventListener('cancel', restoreFullscreenAfterPicker);
+    return () => {
+      fileInput?.removeEventListener('cancel', restoreFullscreenAfterPicker);
+      jsonInput?.removeEventListener('cancel', restoreFullscreenAfterPicker);
+    };
+  }, [restoreFullscreenAfterPicker]);
+
   return (
-    <div className="relative h-[calc(100dvh-11rem)] min-h-[560px] w-full overflow-hidden rounded-2xl border border-border bg-slate-950 font-sans text-slate-100 select-none">
+    <div
+      ref={containerRef}
+      className="relative h-dvh w-full overflow-hidden bg-slate-950 font-sans text-slate-100 select-none"
+    >
       <input
         ref={fileInputRef}
         type="file"
@@ -276,6 +338,7 @@ export default function OmniModel3D() {
           if (e.target.files?.[0]) {
             handleFileUpload(e.target.files[0]);
           }
+          restoreFullscreenAfterPicker();
         }}
       />
 
@@ -288,6 +351,7 @@ export default function OmniModel3D() {
           if (e.target.files?.[0]) {
             handleImportJSON(e.target.files[0]);
           }
+          restoreFullscreenAfterPicker();
         }}
       />
 
@@ -298,7 +362,7 @@ export default function OmniModel3D() {
             <Upload className="h-10 w-10" />
           </div>
           <h2 className="mb-2 text-2xl font-bold text-white">松开鼠标即可导入任意 3D 模型</h2>
-          <p className="text-sm text-cyan-200">自动等比缩放至 40% 视口比例，支持任意部件 3D 空间直线打标与 GLB 重新打包</p>
+          <p className="text-sm text-cyan-200">自动等比缩放至合适视口比例，支持任意部件 3D 空间直线打标与 GLB 重新打包</p>
         </div>
       )}
 
@@ -306,6 +370,15 @@ export default function OmniModel3D() {
       <header className="pointer-events-none absolute top-0 right-0 left-0 z-20 flex items-center justify-between px-3 py-2.5 sm:px-5">
         {/* Left Brand Badge */}
         <div className="pointer-events-auto flex items-center gap-2">
+          <Link
+            to="/"
+            onClick={() => soundFX.playClick()}
+            className="flex items-center gap-1 rounded-lg border border-slate-700/80 bg-slate-900/80 px-2 py-1 text-xs text-slate-300 shadow-md backdrop-blur transition-colors hover:bg-slate-800 hover:text-white"
+            title="返回主页"
+          >
+            <ArrowLeft className="h-3 w-3" />
+            <span>主页</span>
+          </Link>
           <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 p-[1px] shadow-md shadow-cyan-900/20">
             <div className="flex h-full w-full items-center justify-center rounded-[7px] bg-slate-950">
               <Box className="h-3.5 w-3.5 text-cyan-400" />
@@ -352,7 +425,7 @@ export default function OmniModel3D() {
                 <span>备份</span>
               </button>
               <button
-                onClick={() => jsonInputRef.current?.click()}
+                onClick={openJsonPicker}
                 className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
                 title="从备份 JSON 恢复标注数据"
               >
@@ -441,11 +514,21 @@ export default function OmniModel3D() {
             </button>
           )}
 
+          {/* Fullscreen Toggle Button */}
+          <button
+            onClick={handleToggleFullscreen}
+            className="flex items-center gap-1 rounded-lg border border-slate-700/80 bg-slate-900/80 px-2 py-1 text-xs text-slate-300 shadow-md backdrop-blur transition-colors hover:bg-slate-800 hover:text-white"
+            title={isFullscreen ? '退出全屏（Esc）' : '全屏浏览 3D 模型'}
+          >
+            {isFullscreen ? <Minimize className="h-3 w-3 text-cyan-400" /> : <Maximize className="h-3 w-3 text-cyan-400" />}
+            <span>{isFullscreen ? '退出全屏' : '全屏'}</span>
+          </button>
+
           {/* Import GLB Button */}
           <button
             onClick={() => {
               soundFX.playClick();
-              fileInputRef.current?.click();
+              openFilePicker();
             }}
             className="flex items-center gap-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-2.5 py-1 text-xs font-medium text-white shadow-md shadow-blue-900/30 backdrop-blur transition-all hover:from-blue-500 hover:to-indigo-500 active:scale-95"
             title={modelSource === 'none' ? '导入 GLB 模型' : '更换为其他 GLB 模型'}
@@ -455,6 +538,34 @@ export default function OmniModel3D() {
           </button>
         </div>
       </header>
+
+      {/* 模型导入进度：读取/解析全程本地，数据不出浏览器 */}
+      {loadProgress && (
+        <div className="pointer-events-none absolute top-14 left-1/2 z-30 w-[min(420px,calc(100%-2rem))] -translate-x-1/2 rounded-xl border border-cyan-500/30 bg-slate-900/95 p-4 shadow-2xl shadow-cyan-950/40 backdrop-blur">
+          <div className="mb-2 flex items-center gap-2">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-cyan-400" />
+            <span className="truncate text-sm font-medium text-slate-100">{loadProgress.fileName}</span>
+            <span className="ml-auto shrink-0 font-mono text-xs text-slate-400">{loadProgress.fileSizeMB} MB</span>
+          </div>
+          <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+            <div
+              className={`h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 ${
+                loadProgress.phase === 'parsing' ? 'w-full animate-pulse' : 'transition-[width] duration-150'
+              }`}
+              style={loadProgress.phase === 'reading' ? { width: `${loadProgress.percent}%` } : undefined}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+            <span className="truncate">
+              {loadProgress.phase === 'reading' ? `正在读取文件… ${loadProgress.percent}%` : '正在本地解析模型…'}
+            </span>
+            <span className="flex shrink-0 items-center gap-1 text-emerald-400">
+              <ShieldCheck className="h-3 w-3" />
+              仅本地加载 · 不上传服务器
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* 3D Model Scene Viewport */}
       <main className="h-full w-full">
@@ -473,6 +584,7 @@ export default function OmniModel3D() {
           customFile={customFile}
           demoTrigger={demoTrigger}
           onModelLoaded={handleModelLoaded}
+          onLoadProgress={setLoadProgress}
           cameraPresetCommand={cameraPresetCommand}
           onPreviousViewChange={setHasPreviousView}
           onManualOrbit={() => {
@@ -501,13 +613,13 @@ export default function OmniModel3D() {
             <p className="mb-6 max-w-md text-xs leading-relaxed text-slate-300 sm:text-sm">
               内置机械工程演示模型，亦可将任意生物 / 工程{" "}
               <span className="font-mono font-semibold text-cyan-400">.glb / .gltf</span>{" "}
-              模型拖入页面：自动缩放至 <span className="font-mono font-semibold text-cyan-400">40% 黄金视口比例</span>
+              模型拖入页面：自动缩放至 <span className="font-mono font-semibold text-cyan-400">合适视口比例</span>
               ，支持 3D 空间直线打标、标签管理、截图与独立网页导出。
             </p>
 
             {/* Drag & Drop Action Box */}
             <div
-              onClick={() => fileInputRef.current?.click()}
+              onClick={openFilePicker}
               className="group mb-5 flex w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-cyan-500/40 bg-slate-900/60 p-5 transition-all hover:border-cyan-400 hover:bg-slate-900/90"
             >
               <Upload className="mb-2 h-6 w-6 text-cyan-400 transition-transform group-hover:scale-110" />

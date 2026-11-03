@@ -10,7 +10,7 @@ import {
   Layers, 
   Calendar,
   Volume2,
-  Maximize2
+  Crosshair
 } from 'lucide-react';
 import { soundFX } from '../utils/audio';
 
@@ -195,8 +195,8 @@ export const AnnotationDetailModal: React.FC<AnnotationDetailModalProps> = ({
           }}
           className="px-3.5 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs flex items-center gap-1.5 transition-colors"
         >
-          <Maximize2 className="w-3.5 h-3.5" />
-          <span>镜头居中对准</span>
+          <Crosshair className="w-3.5 h-3.5" />
+          <span>镜头对准此标注</span>
         </button>
 
         <div className="flex items-center gap-1.5">
