@@ -45,7 +45,7 @@ export function Osmosis() {
         <svg viewBox="0 0 400 320" className="aspect-[4/3] w-full">
           {/* beaker */}
           <path d="M20 120 V305 Q20 312 28 312 H372 Q380 312 380 305 V120" fill="none" stroke="var(--stage-foreground)" strokeOpacity="0.5" strokeWidth="2" />
-          <rect x="22" y="180" width="356" height="130" fill="oklch(0.6 0.08 230 / ${0.15 + outer / 100})" />
+          <rect x="22" y="180" width="356" height="130" fill={`oklch(0.6 0.08 230 / ${0.15 + outer / 100})`} />
           {/* funnel */}
           <path d="M140 250 L180 160 V40 H220 V160 L260 250 Z" fill="none" stroke="var(--membrane)" strokeOpacity="0.7" strokeWidth="1.5" />
           <clipPath id="funnel">
