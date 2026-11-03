@@ -23,7 +23,8 @@ export function Mitosis() {
   const [play, setPlay] = useState(false);
   useFrame((dt) => setT((v) => (v + dt * 0.06) % 1), play);
 
-  const pi = phases.findIndex((p) => t <= p.end);
+  const pi = Math.max(0, phases.findIndex((p) => t <= p.end));
+  const ph = phases[pi]!;
   const condense = seg(t, 0.2, 0.38);
   const align = seg(t, 0.4, 0.52);
   const split = seg(t, 0.56, 0.74);
@@ -33,7 +34,7 @@ export function Mitosis() {
 
   return (
     <>
-      <Stage caption={`${phases[pi].name} · ${(t * 100).toFixed(0)}%`}>
+      <Stage caption={`${ph.name} · ${(t * 100).toFixed(0)}%`}>
         <svg viewBox="-200 -150 400 300" className="aspect-[4/3] w-full">
           {/* cell membrane, pinches during telophase */}
           <path
@@ -54,7 +55,7 @@ export function Mitosis() {
             <circle key={s} cx={s * (90 + cleave * 10)} cy="0" r={t < 0.5 ? 60 : 45} fill="none" stroke="var(--stage-foreground)" strokeDasharray="3 3" strokeOpacity={0.4 * Math.min(1, nucleus)} />
           ))}
           {/* chromosomes */}
-          {home.map(([hx, hy], i) => {
+          {home.map(([hx = 0, hy = 0], i) => {
             const ax = 0, ay = -45 + i * 30;
             const x = hx + (ax - hx) * align;
             const y = hy + (ay - hy) * align;
@@ -81,20 +82,20 @@ export function Mitosis() {
           <Button size="icon" variant="outline" onClick={() => setPlay((p) => !p)} aria-label={play ? "暂停" : "播放"}>
             {play ? <Pause /> : <Play />}
           </Button>
-          <Slider className="flex-1" value={[t]} min={0} max={0.999} step={0.001} onValueChange={(v) => { setPlay(false); setT(v[0]); }} />
+          <Slider className="flex-1" value={[t]} min={0} max={0.999} step={0.001} onValueChange={(v) => { setPlay(false); setT(v[0] ?? 0); }} />
         </div>
         <div className="grid grid-cols-5 gap-1">
           {phases.map((p, i) => (
             <button
               key={p.name}
-              onClick={() => { setPlay(false); setT((i ? phases[i - 1].end : 0) + 0.08); }}
+              onClick={() => { setPlay(false); setT((i ? phases[i - 1]!.end : 0) + 0.08); }}
               className={cn("rounded py-1.5 text-xs transition-colors", i === pi ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground")}
             >
               {p.name}
             </button>
           ))}
         </div>
-        <p className="min-h-12 text-sm leading-relaxed text-muted-foreground">{phases[pi].note}</p>
+        <p className="min-h-12 text-sm leading-relaxed text-muted-foreground">{ph.note}</p>
         <div className="grid grid-cols-3 gap-2">
           <Readout label="染色体" value={chromCount} />
           <Readout label="单体" value={t > 0.2 && t <= 0.56 ? 8 : 0} />
